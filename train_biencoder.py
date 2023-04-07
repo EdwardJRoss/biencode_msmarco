@@ -214,7 +214,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--train_batch_size", default=64, type=int)
 parser.add_argument("--max_seq_length", default=300, type=int)
 parser.add_argument("--model_name", required=True)
-parser.add_argument("--max_passages", default=0, type=int)
+parser.add_argument("--max_queries", default=0, type=int)
 parser.add_argument("--epochs", default=10, type=int)
 parser.add_argument("--pooling", default="mean")
 parser.add_argument("--negs_to_use", default=None, help="From which systems should negatives be used? Multiple systems seperated by comma. None = all")
@@ -255,6 +255,8 @@ model_save_path = 'output/train_bi-encoder-mnrl-{}-margin_{:.1f}-{}'.format(mode
 
 corpus = load_corpus(data_folder=data_folder)
 train_queries = load_train_queries(data_folder=data_folder)
+if args.max_queries > 0:
+    train_queries = {qid: train_queries[qid] for qid in list(train_queries.keys())[:args.max_queries]}
 logging.info("Train queries: {}".format(len(train_queries)))
 
 

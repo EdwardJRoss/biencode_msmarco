@@ -12,17 +12,14 @@ With a distilbert-base-uncased model, it should achieve a performance of about 3
 Running this script:
 python train_bi-encoder-v3.py
 """
-import sys
 import json
 from torch.utils.data import DataLoader
-from sentence_transformers import SentenceTransformer, LoggingHandler, util, models, evaluation, losses, InputExample
+from sentence_transformers import SentenceTransformer, LoggingHandler, util, models, losses, InputExample
 import logging
 from datetime import datetime
 import gzip
 import os
 import tarfile
-from collections import defaultdict
-from torch.utils.data import IterableDataset
 import tqdm
 from torch.utils.data import Dataset
 import random
@@ -56,9 +53,9 @@ args = parser.parse_args()
 print(args)
 
 # The  model we want to fine-tune
-model_name = 'distilbert-base-uncased'
+model_name = args.model_name
 
-train_batch_size = args.train_batch_size           #Increasing the train batch size improves the model performance, but requires more GPU memory
+
 max_seq_length = args.max_seq_length            #Max length for passages. Increasing it, requires more GPU memory
 ce_score_margin = args.ce_score_margin             #Margin for the CrossEncoder score between negative and positive passages
 num_negs_per_system = args.num_negs_per_system         # We used different systems to mine hard negatives. Number of hard negatives to add from each system
@@ -221,7 +218,7 @@ class MSMARCODataset(Dataset):
 
 # For training the SentenceTransformer model, we need a dataset, a dataloader, and a loss used for training.
 train_dataset = MSMARCODataset(train_queries, corpus=corpus)
-train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=train_batch_size)
+train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=args.train_batch_size)
 train_loss = losses.MultipleNegativesRankingLoss(model=model)
 
 # Train the model

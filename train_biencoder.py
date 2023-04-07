@@ -158,10 +158,17 @@ def load_train_queries(data_folder=data_folder,
                        ce_score_margin=0.1,
                        negs_to_use=None,
                        use_all_queries=False) -> Dict[QueryId, TrainQuery]:
-    queries = get_queries(data_folder)
-    ce_scores = get_ce_scores(data_folder)
-    hard_negatives = load_hard_negatives(data_folder)
-    train_queries = get_train_queries(hard_negatives, ce_scores, ce_score_margin, queries, negs_to_use, num_negs_per_system=num_negs_per_system, use_all_queries=use_all_queries)
+    cache_path = os.path.join(data_folder, f'train_queries_{num_negs_per_system}_{ce_score_margin}_{negs_to_use}_{use_all_queries}.pkl.gz')
+    if not os.path.exists(cache_path):
+        queries = get_queries(data_folder)
+        ce_scores = get_ce_scores(data_folder)
+        hard_negatives = load_hard_negatives(data_folder)
+        train_queries = get_train_queries(hard_negatives, ce_scores, ce_score_margin, queries, negs_to_use, num_negs_per_system=num_negs_per_system, use_all_queries=use_all_queries)
+        with gzip.open(cache_path, 'wb') as fOut:
+            pickle.dump(train_queries, fOut)
+    logging.info("Load train queries")
+    with gzip.open(cache_path, 'rb') as fIn:
+        train_queries = pickle.load(fIn)
     return train_queries
 
 # We create a custom MSMARCO dataset that returns triplets (query, positive, negative)

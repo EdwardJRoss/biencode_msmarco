@@ -12,26 +12,26 @@ With a distilbert-base-uncased model, it should achieve a performance of about 3
 Running this script:
 python train_bi-encoder-v3.py
 """
-import json
-import torch
-from torch.optim import AdamW
-from torch.utils.data import DataLoader
-import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModel
-from transformers import get_linear_schedule_with_warmup
-from sentence_transformers import LoggingHandler, util # type: ignore
-import logging
-from datetime import datetime
-import gzip
-import os
-import tarfile
-import tqdm
-from torch.utils.data import Dataset
-import random
-import pickle
 import argparse
-from typing import Dict, Iterable, List, Optional, TypedDict, Union
+import gzip
+import json
+import logging
+import os
+import pickle
+import random
+import tarfile
+from datetime import datetime
 from pathlib import Path
+from typing import Dict, Iterable, List, Optional, TypedDict, Union
+
+import torch
+import torch.nn.functional as F
+import tqdm
+from sentence_transformers import LoggingHandler, util  # type: ignore
+from torch.optim import AdamW
+from torch.utils.data import DataLoader, Dataset
+from transformers import (AutoModel, AutoTokenizer,  # type: ignore
+                          get_linear_schedule_with_warmup)
 
 QueryId = int
 PassageId = int

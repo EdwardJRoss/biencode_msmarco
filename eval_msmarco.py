@@ -6,15 +6,17 @@ Usage:
 python eval_msmarco.py model_name [max_corpus_size_in_thousands]
 """
 
-import torch
-from sentence_transformers import  LoggingHandler, util
-from transformers import AutoTokenizer, AutoModel
-import numpy as np
 import logging
-import sys
 import os
-from tqdm import tqdm
+import sys
 import tarfile
+
+import numpy as np
+import torch
+from sentence_transformers import LoggingHandler, util
+from tqdm import tqdm
+from transformers import AutoModel, AutoTokenizer
+
 from train_biencoder import embed
 
 #### Just some code to print debug information to stdout

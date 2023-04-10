@@ -283,6 +283,9 @@ if __name__ == '__main__':
     collator = SentenceCollate(tokenizer, max_length=max_seq_length)
     train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=args.train_batch_size, collate_fn=collator)
 
+
+    scaler = torch.cuda.amp.GradScaler()
+
     optimiser = AdamW(model.parameters(), lr=args.lr)
     scheduler = get_linear_schedule_with_warmup(optimiser, num_warmup_steps=args.warmup_steps, num_training_steps=len(train_dataloader) * num_epochs)
 
@@ -298,19 +301,25 @@ if __name__ == '__main__':
             neg_tokens = {k:v.to(model.device) for k,v in neg_tokens.items()}
 
 
-            query_emb = embed(model, query_tokens)
-            pos_emb = embed(model, pos_tokens)
-            neg_emb = embed(model, neg_tokens)
-            doc_emb = torch.cat([pos_emb, neg_emb], dim=0)
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                query_emb = embed(model, query_tokens)
+                pos_emb = embed(model, pos_tokens)
+                neg_emb = embed(model, neg_tokens)
+                doc_emb = torch.cat([pos_emb, neg_emb], dim=0)
 
-            scores = (query_emb @ doc_emb.t()) / temperature
-            labels = torch.arange(len(scores), dtype=torch.long, device=scores.device)
+                scores = (query_emb @ doc_emb.t()) / temperature
+                labels = torch.arange(len(scores), dtype=torch.long, device=scores.device)
             
-            loss = F.cross_entropy(scores, labels)
+                loss = F.cross_entropy(scores, labels)
 
-            loss.backward()
-            optimiser.step()
-            scheduler.step()
+            scale = scaler.get_scale()
+            scaler.scale(loss).backward()
+            scaler.step(optimiser)
+            scaler.update()
+            # Only step when optimiser isn't skipped
+            # https://discuss.pytorch.org/t/optimizer-step-before-lr-scheduler-step-error-using-gradscaler/92930/10   
+            if not (scale > scaler.get_scale()):
+                scheduler.step()
             if step % 100 == 0:
                 logging.info("Epoch: {}, Step: {}, Loss: {}".format(epoch, step, loss.item()))
 

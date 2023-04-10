@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModel
 from transformers import get_linear_schedule_with_warmup
-from sentence_transformers import LoggingHandler, util, InputExample # type: ignore
+from sentence_transformers import LoggingHandler, util # type: ignore
 import logging
 from datetime import datetime
 import gzip
@@ -201,7 +201,7 @@ class MSMARCODataset(Dataset):
         neg_text = self.corpus[neg_id]
         query['neg'].append(neg_id)
 
-        return InputExample(texts=[query_text, pos_text, neg_text])
+        return [query_text, pos_text, neg_text]
 
     def __len__(self):
         return len(self.queries)
@@ -212,7 +212,7 @@ class SentenceCollate:
         self.max_length = max_length
     
     def __call__(self, batch):
-        batch_parts = list(zip(*[ex.texts for ex in batch]))
+        batch_parts = list(zip(*batch))
         batch_tokens = [self.tokenizer(text, padding=True, truncation=True,
                                 max_length=self.max_length, return_tensors='pt',
                                 ) for text in batch_parts]

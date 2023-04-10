@@ -6,11 +6,15 @@ Usage:
 python eval_msmarco.py model_name [max_corpus_size_in_thousands]
 """
 
-from sentence_transformers import  LoggingHandler, SentenceTransformer, util
+import torch
+import torch.nn.functional as F
+from sentence_transformers import  LoggingHandler, util
+from transformers import AutoTokenizer, AutoModel
 import numpy as np
 import logging
 import sys
 import os
+from tqdm import tqdm
 import tarfile
 
 #### Just some code to print debug information to stdout
@@ -29,7 +33,10 @@ corpus_max_size = int(sys.argv[2])*1000 if len(sys.argv) >= 3 else 0
 
 ####  Load model
 
-model = SentenceTransformer(model_name)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+model = AutoModel.from_pretrained(model_name).to(device).eval()
+tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 ### Data files
 data_folder = 'msmarco-data'
@@ -100,9 +107,28 @@ logging.info("Queries: {}".format(len(dev_queries)))
 logging.info("Corpus: {}".format(len(corpus)))
 
 k = 10
+max_seq_length = 512
 
-query_embeddings = model.encode(list(dev_queries.values()), normalize_embeddings=True)
-corpus_embeddings = model.encode(list(corpus.values()), normalize_embeddings=True, show_progress_bar=True)
+def embed_passages(passages, batch_size=100, normalize=True):
+    embeddings = []
+    for i in tqdm(range(0, len(passages), batch_size), desc="Embedding passages", total=len(passages)//batch_size):
+        batch = passages[i:i+batch_size]
+        tokens = tokenizer(batch, padding=True, truncation=True, max_length=max_seq_length, return_tensors="pt")
+        tokens = {k: v.to(model.device) for k, v in tokens.items()}
+        with torch.inference_mode():
+            hidden_state = model(**tokens).last_hidden_state
+            # Mean pooling, only on attended tokens
+            batch_embeddings = (hidden_state * tokens['attention_mask'].unsqueeze(-1)).sum(dim=1) / tokens['attention_mask'].sum(dim=1, keepdim=True)
+            if normalize:
+                batch_embeddings = F.normalize(batch_embeddings, dim=1)
+        embeddings.append(batch_embeddings.cpu().numpy())
+    return np.concatenate(embeddings)
+
+
+logging.info("Embedding queries")
+query_embeddings = embed_passages(list(dev_queries.values()), normalize=True)
+logging.info("Embedding passages")
+corpus_embeddings = embed_passages(list(corpus.values()), normalize=True)
 
 scores = query_embeddings @ corpus_embeddings.T
 top_idx = np.argsort(-scores, axis=1)[:, :k]
@@ -116,6 +142,5 @@ def rr(y_true, y_pred):
 
 mrr_score = np.mean([rr(dev_rel_docs[qid], query_preds[qid]) for qid in query_preds])
 logging.info("MRR@{}: {:.4f}".format(k, mrr_score))
-
 recall_at_k = np.mean([len(set(dev_rel_docs[qid]).intersection(set(query_preds[qid]))) / len(dev_rel_docs[qid]) for qid in query_preds])
 logging.info("Recall@{}: {:.4f}".format(k, recall_at_k))

@@ -13,8 +13,13 @@ Running this script:
 python train_bi-encoder-v3.py
 """
 import json
+import torch
+from torch.optim import AdamW
 from torch.utils.data import DataLoader
-from sentence_transformers import SentenceTransformer, LoggingHandler, util, models, losses, InputExample # type: ignore
+import torch.nn.functional as F
+from transformers import AutoTokenizer, AutoModel
+from transformers import get_linear_schedule_with_warmup
+from sentence_transformers import LoggingHandler, util, InputExample # type: ignore
 import logging
 from datetime import datetime
 import gzip
@@ -200,80 +205,115 @@ class MSMARCODataset(Dataset):
 
     def __len__(self):
         return len(self.queries)
+    
+class SentenceCollate:
+    def __init__(self, tokenizer, max_length=512):
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+    
+    def __call__(self, batch):
+        batch_parts = list(zip(*[ex.texts for ex in batch]))
+        batch_tokens = [self.tokenizer(text, padding=True, truncation=True,
+                                max_length=self.max_length, return_tensors='pt',
+                                ) for text in batch_parts]
+        return batch_tokens
+
+def embed(model, tokens, normalize=True):
+    hidden_state = model(**tokens).last_hidden_state
+    embeddings = (hidden_state * tokens['attention_mask'].unsqueeze(-1)).sum(1) / tokens['attention_mask'].sum(1, keepdim=True)
+    if normalize:
+        embeddings = F.normalize(embeddings, p=2, dim=1)
+    return embeddings
+
+if __name__ == '__main__':
+    #### Just some code to print debug information to stdout
+    logging.basicConfig(format='%(asctime)s - %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S',
+                        level=logging.INFO,
+                        handlers=[LoggingHandler()])
+    #### /print debug information to stdout
 
 
-#### Just some code to print debug information to stdout
-logging.basicConfig(format='%(asctime)s - %(message)s',
-                    datefmt='%Y-%m-%d %H:%M:%S',
-                    level=logging.INFO,
-                    handlers=[LoggingHandler()])
-#### /print debug information to stdout
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train_batch_size", default=64, type=int)
+    parser.add_argument("--max_seq_length", default=300, type=int)
+    parser.add_argument("--model_name", required=True)
+    parser.add_argument("--max_queries", default=0, type=int)
+    parser.add_argument("--epochs", default=10, type=int)
+    parser.add_argument("--pooling", default="mean")
+    parser.add_argument("--negs_to_use", default=None, help="From which systems should negatives be used? Multiple systems seperated by comma. None = all")
+    parser.add_argument("--warmup_steps", default=1000, type=int)
+    parser.add_argument("--lr", default=2e-5, type=float)
+    parser.add_argument("--num_negs_per_system", default=5, type=int)
+    parser.add_argument("--use_pre_trained_model", default=False, action="store_true")
+    parser.add_argument("--use_all_queries", default=False, action="store_true")
+    parser.add_argument("--ce_score_margin", default=3.0, type=float)
+    args = parser.parse_args()
+
+    print(args)
+
+    # The  model we want to fine-tune
+    model_name = args.model_name
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--train_batch_size", default=64, type=int)
-parser.add_argument("--max_seq_length", default=300, type=int)
-parser.add_argument("--model_name", required=True)
-parser.add_argument("--max_queries", default=0, type=int)
-parser.add_argument("--epochs", default=10, type=int)
-parser.add_argument("--pooling", default="mean")
-parser.add_argument("--negs_to_use", default=None, help="From which systems should negatives be used? Multiple systems seperated by comma. None = all")
-parser.add_argument("--warmup_steps", default=1000, type=int)
-parser.add_argument("--lr", default=2e-5, type=float)
-parser.add_argument("--num_negs_per_system", default=5, type=int)
-parser.add_argument("--use_pre_trained_model", default=False, action="store_true")
-parser.add_argument("--use_all_queries", default=False, action="store_true")
-parser.add_argument("--ce_score_margin", default=3.0, type=float)
-args = parser.parse_args()
+    max_seq_length = args.max_seq_length            #Max length for passages. Increasing it, requires more GPU memory
+    ce_score_margin = args.ce_score_margin             #Margin for the CrossEncoder score between negative and positive passages
+    num_negs_per_system = args.num_negs_per_system         # We used different systems to mine hard negatives. Number of hard negatives to add from each system
+    num_epochs = args.epochs                 # Number of epochs we want to train
+    negs_to_use = args.negs_to_use.split(",") if args.negs_to_use is not None else None
 
-print(args)
-
-# The  model we want to fine-tune
-model_name = args.model_name
+    temperature = 0.05
 
 
-max_seq_length = args.max_seq_length            #Max length for passages. Increasing it, requires more GPU memory
-ce_score_margin = args.ce_score_margin             #Margin for the CrossEncoder score between negative and positive passages
-num_negs_per_system = args.num_negs_per_system         # We used different systems to mine hard negatives. Number of hard negatives to add from each system
-num_epochs = args.epochs                 # Number of epochs we want to train
-negs_to_use = args.negs_to_use.split(",") if args.negs_to_use is not None else None
+    model = AutoModel.from_pretrained(model_name).cuda().train()
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    model_save_path = 'output/train_bi-encoder-mnrl-{}-margin_{:.1f}-{}'.format(model_name.replace("/", "-"), ce_score_margin, datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
 
 
-# Load our embedding model
-if args.use_pre_trained_model:
-    logging.info("use pretrained SBERT model")
-    model = SentenceTransformer(model_name)
-    model.max_seq_length = max_seq_length
-else:
-    logging.info("Create new SBERT model")
-    word_embedding_model = models.Transformer(model_name, max_seq_length=max_seq_length)
-    pooling_model = models.Pooling(word_embedding_model.get_word_embedding_dimension(), args.pooling)
-    model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
-
-model_save_path = 'output/train_bi-encoder-mnrl-{}-margin_{:.1f}-{}'.format(model_name.replace("/", "-"), ce_score_margin, datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+    corpus = load_corpus(data_folder=data_folder)
+    train_queries = load_train_queries(data_folder=data_folder)
+    if args.max_queries > 0:
+        train_queries = {qid: train_queries[qid] for qid in list(train_queries.keys())[:args.max_queries]}
+    logging.info("Train queries: {}".format(len(train_queries)))
 
 
-corpus = load_corpus(data_folder=data_folder)
-train_queries = load_train_queries(data_folder=data_folder)
-if args.max_queries > 0:
-    train_queries = {qid: train_queries[qid] for qid in list(train_queries.keys())[:args.max_queries]}
-logging.info("Train queries: {}".format(len(train_queries)))
+    # For training the SentenceTransformer model, we need a dataset, a dataloader, and a loss used for training.
+    train_dataset = MSMARCODataset(train_queries, corpus=corpus)
+    collator = SentenceCollate(tokenizer, max_length=max_seq_length)
+    train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=args.train_batch_size, collate_fn=collator)
+
+    optimiser = AdamW(model.parameters(), lr=args.lr)
+    scheduler = get_linear_schedule_with_warmup(optimiser, num_warmup_steps=args.warmup_steps, num_training_steps=len(train_dataloader) * num_epochs)
+
+    for epoch in tqdm.trange(num_epochs):
+        model.train()
+        for step, batch in enumerate(tqdm.tqdm(train_dataloader)):
+            optimiser.zero_grad()
+
+            query_tokens, pos_tokens, neg_tokens = batch
+
+            query_tokens = {k:v.to(model.device) for k,v in query_tokens.items()}
+            pos_tokens = {k:v.to(model.device) for k,v in pos_tokens.items()}
+            neg_tokens = {k:v.to(model.device) for k,v in neg_tokens.items()}
 
 
-# For training the SentenceTransformer model, we need a dataset, a dataloader, and a loss used for training.
-train_dataset = MSMARCODataset(train_queries, corpus=corpus)
-train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=args.train_batch_size)
-train_loss = losses.MultipleNegativesRankingLoss(model=model)
+            query_emb = embed(model, query_tokens)
+            pos_emb = embed(model, pos_tokens)
+            neg_emb = embed(model, neg_tokens)
+            doc_emb = torch.cat([pos_emb, neg_emb], dim=0)
 
-# Train the model
-model.fit(train_objectives=[(train_dataloader, train_loss)],
-          epochs=num_epochs,
-          warmup_steps=args.warmup_steps,
-          use_amp=True,
-          checkpoint_path=model_save_path,
-          checkpoint_save_steps=len(train_dataloader),
-          optimizer_params = {'lr': args.lr},
-          )
+            scores = (query_emb @ doc_emb.t()) / temperature
+            labels = torch.arange(len(scores), dtype=torch.long, device=scores.device)
+            
+            loss = F.cross_entropy(scores, labels)
 
-# Save the model
-model.save(model_save_path)
+            loss.backward()
+            optimiser.step()
+            scheduler.step()
+            if step % 100 == 0:
+                logging.info("Epoch: {}, Step: {}, Loss: {}".format(epoch, step, loss.item()))
+
+
+    model.save_pretrained(model_save_path)
+    tokenizer.save_pretrained(model_save_path)

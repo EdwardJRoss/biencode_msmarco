@@ -16,6 +16,7 @@ import sys
 import os
 from tqdm import tqdm
 import tarfile
+from train_biencoder import embed
 
 #### Just some code to print debug information to stdout
 logging.basicConfig(format='%(asctime)s - %(message)s',
@@ -116,11 +117,7 @@ def embed_passages(passages, batch_size=100, normalize=True):
         tokens = tokenizer(batch, padding=True, truncation=True, max_length=max_seq_length, return_tensors="pt")
         tokens = {k: v.to(model.device) for k, v in tokens.items()}
         with torch.inference_mode():
-            hidden_state = model(**tokens).last_hidden_state
-            # Mean pooling, only on attended tokens
-            batch_embeddings = (hidden_state * tokens['attention_mask'].unsqueeze(-1)).sum(dim=1) / tokens['attention_mask'].sum(dim=1, keepdim=True)
-            if normalize:
-                batch_embeddings = F.normalize(batch_embeddings, dim=1)
+            batch_embeddings = embed(model, tokens, normalize=normalize)
         embeddings.append(batch_embeddings.cpu().numpy())
     return np.concatenate(embeddings)
 

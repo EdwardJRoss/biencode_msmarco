@@ -7,7 +7,6 @@ python eval_msmarco.py model_name [max_corpus_size_in_thousands]
 """
 
 import torch
-import torch.nn.functional as F
 from sentence_transformers import  LoggingHandler, util
 from transformers import AutoTokenizer, AutoModel
 import numpy as np
